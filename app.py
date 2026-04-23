@@ -1,93 +1,140 @@
 import streamlit as st
 import pandas as pd
 import random
+import os
 
-# --- 設定網頁樣式 (字體加大) ---
+# --- 1. 設定網頁樣式 ---
+st.set_page_config(page_title="HWG 聽力測驗", layout="centered")
+
 st.markdown("""
     <style>
-    .stButton>button {
-        width: 100%;
-        height: 3em;
-        font-size: 24px !important;
-        margin-bottom: 10px;
+    div.stButton > button {
+        width: 100% !important;
+        height: auto !important;
+        padding: 15px 20px !important;
+        background-color: white !important;
+        border: 2px solid #eee !important;
+        border-radius: 15px !important;
+        display: flex !important;
+        justify-content: flex-start !important;
+        align-items: center !important;
     }
-    .question-text {
-        font-size: 32px !important;
-        font-weight: bold;
-        color: #2E4053;
+    div.stButton > button p {
+        font-size: 22px !important;
+        font-weight: bold !important;
+        text-align: left !important;
+        white-space: pre-wrap !important; 
     }
+    audio { width: 100% !important; height: 50px !important; margin-bottom: 20px; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 1. 讀取資料 ---
+# --- 2. 讀取並合併資料 (1-100 & 101-200) ---
 @st.cache_data
 def load_data():
-    # 讀取你的 100 題 CSV
-    df = pd.read_csv("HWG 1-200.csv")
-    return df
+    files_to_load = ["HWG 1-200.csv", "HWG101-200.csv"]
+    df_list = []
+    for file_name in files_to_load:
+        if os.path.exists(file_name):
+            try:
+                temp_df = pd.read_csv(file_name, encoding='utf-8-sig')
+            except:
+                temp_df = pd.read_csv(file_name, encoding='big5')
+            
+            # 統一欄位名稱為小寫並去空格，確保 Answerkey 與 answer 能對應
+            temp_df.columns = [c.strip().lower() for c in temp_df.columns]
+            df_list.append(temp_df)
+    
+    return pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
 
 df = load_data()
 
-# --- 2. 初始化 Session State (確保重新整理不會亂掉) ---
-if 'quiz_data' not in st.session_state:
-    # 從 100 題中隨機選 10 題
-    st.session_state.quiz_data = df.sample(n=10).to_dict('records')
-    st.session_state.current_idx = 0
-    st.session_state.answerkeys = [] # 格式: (題目, 選錯的項, 正確答案, 是否正確)
+# --- 3. 初始化 Session ---
+if df.empty:
+    st.error("❌ 找不到 CSV 檔案，請確認檔案已上傳。")
+    st.stop()
 
-# --- 3. 測驗介面 ---
-if st.session_state.current_idx < 10:
+if 'quiz_data' not in st.session_state:
+    st.session_state.quiz_data = df.sample(n=min(len(df), 10)).to_dict('records')
+    st.session_state.current_idx = 0
+    st.session_state.results = []
+
+# --- 4. 測驗介面 ---
+if st.session_state.current_idx < len(st.session_state.quiz_data):
     q = st.session_state.quiz_data[st.session_state.current_idx]
     
-    st.write(f"### 第 {st.session_state.current_idx + 1} / 10 題")
-    st.markdown(f'<p class="question-text">聽聽看，哪一個是對的？</p>', unsafe_allow_html=True)
+    # 讀取欄位 (已轉小寫)
+    q_id = str(q.get('id', 0)).zfill(3)
+    q_text = q.get('question', '')
     
-    # 播放音檔 (檔名需對應: q_001.mp3)
-    qid = str(q['id']).zfill(3)
-    st.audio(f"audio/q_{qid}.mp3")
+    opts_map = {
+        'A': str(q.get('a', '')),
+        'B': str(q.get('b', '')),
+        'C': str(q.get('c', ''))
+    }
+    
+    # 支援 answerkey 或 answer 欄位
+    correct_key = str(q.get('answerkey', q.get('answer', ''))).strip().upper()
 
-    # 答案按鈕 (字體已透過 CSS 加大)
-    # 假設你的 CSV 欄位是 option_a, option_b, option_c
-    opts = [q['option_a'], q['option_b'], q['option_c']]
+    st.write(f"### 第 {st.session_state.current_idx + 1} / 10 題")
     
-    for opt in opts:
-        if st.button(opt):
-            # 判斷正誤 (假設 answerkey 欄位存的是內容文字，或是 A/B/C)
-            # 這裡示範比對文字內容
-            is_correct = (opt == q['answerkey'])
-            st.session_state.answerkeys.append({
-                "question": q['question'],
-                "user_choice": opt,
-                "correct_answerkey": q['answerkey'],
+    audio_path = f"audio/q_{q_id}.mp3"
+    if os.path.exists(audio_path):
+        st.audio(audio_path)
+    else:
+        st.warning(f"找不到音檔: {audio_path}")
+
+    for key in ['A', 'B', 'C']:
+        if st.button(f"{key}. {opts_map[key]}", key=f"btn_{st.session_state.current_idx}_{key}", use_container_width=True):
+            is_correct = (key == correct_key)
+            st.session_state.results.append({
+                "question": q_text,
+                "user_choice": opts_map[key],
+                "correct_answer": opts_map.get(correct_key, "答案設定錯誤"),
                 "is_correct": is_correct
             })
             st.session_state.current_idx += 1
             st.rerun()
 
-# --- 4. 結果頁面與錯題複製 ---
+# --- 5. 結果頁面 ---
 else:
-    st.balloons()
-    st.header("完成練習！")
+    st.header("🏆 練習結束囉！")
+    score = sum(1 for item in st.session_state.results if item['is_correct'])
+    final_score = score * 10
+    st.subheader(f"得分：{final_score} 分")
+
+    # 製作報告文字
+    wrong_txt = ""
+    for i, item in enumerate(st.session_state.results):
+        if not item['is_correct']:
+            wrong_txt += f"Q{i+1}: {item['question']}\\n❌回答: {item['user_choice']}\\n✅正確: {item['correct_answer']}\\n\\n"
     
-    wrong_list = []
-    score = 0
-    
-    for item in st.session_state.answerkeys:
+    report_text = f"我的英文測驗成績：{final_score} 分\\n{wrong_txt}"
+
+    # 修改後的複製按鈕，避免 f-string 引號衝突
+    html_code = f"""
+        <button id="copyBtn" style="background-color:white; color:#007bff; border:3px solid #8bc34a; padding:15px; font-size:22px; font-weight:bold; border-radius:20px; width:100%; cursor:pointer;">
+            按我複製成績給老師
+        </button>
+        <script>
+            document.getElementById('copyBtn').onclick = function() {{
+                const text = "{report_text}";
+                navigator.clipboard.writeText(text.replace(/\\\\n/g, '\\n')).then(function() {{
+                    document.getElementById('copyBtn').innerText = '✅ 複製成功！';
+                    setTimeout(function() {{ document.getElementById('copyBtn').innerText = '按我複製成績給老師'; }}, 2000);
+                }});
+            }};
+        </script>
+    """
+    st.components.v1.html(html_code, height=100)
+
+    st.write("---")
+    for i, item in enumerate(st.session_state.results):
         if item['is_correct']:
-            score += 1
+            st.success(f"**Q{i+1}: {item['question']}** \n\n 你的回答: {item['user_choice']} ✅")
         else:
-            # 格式化錯題字串
-            wrong_list.append(f"題目：{item['question']}\n你的答案：{item['user_choice']}\n正確答案：{item['correct_answerkey']}\n---")
+            st.error(f"**Q{i+1}: {item['question']}** \n\n 你的回答: {item['user_choice']} ❌ \n\n 正確答案: {item['correct_answer']}")
 
-    st.subheader(f"得分：{score} / 10")
-
-    if wrong_list:
-        st.write("### ❌ 錯題記錄")
-        wrong_text = "\n".join(wrong_list)
-        st.text_area("可以手動選取複製以下錯題內容：", value=wrong_text, height=300)
-    else:
-        st.success("太棒了！全部正確！")
-
-    if st.button("再測驗一次"):
+    if st.button("再玩一次", use_container_width=True):
         del st.session_state.quiz_data
         st.rerun()
