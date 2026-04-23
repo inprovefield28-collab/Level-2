@@ -23,7 +23,7 @@ st.markdown("""
 @st.cache_data
 def load_data():
     # 讀取你的 100 題 CSV
-    df = pd.read_csv("HWG1-200.csv")
+    df = pd.read_csv("HWG 1-200.csv")
     return df
 
 df = load_data()
